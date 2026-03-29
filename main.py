@@ -1,175 +1,175 @@
-import os
 import requests
+import csv
 from datetime import date, timedelta
-from openpyxl import Workbook, load_workbook
-
 
 # ==============================================================================
-# CONFIGURAÇÃO
+# ⚙️ CONFIGURAÇÃO
 # ==============================================================================
 
-MEU_CONSUMO = 700  # kWh/mês — altera consoante o teu caso
-
-# Dados tarifários G9
-POTENCIA_DIA_SMART_INDEX = 0.4236
-ACESSO_REDES_SMART_INDEX = 0.0607
-MARGEM_G9_ESTIMADA       = 0.0150
-POTENCIA_DIA_FIXO        = 0.4498
-ENERGIA_FIXO_KWH         = 0.1348
-
-DIAS_HISTORICO = 30  # janela de cálculo da média OMIE
-
+CONFIG = {
+    "tarifario_atual_nome": "G9 | Vantagem+",
+    # Se definires como None, o script vai buscar os valores ao CSV automaticamente
+    "manual_preco_kwh": None,  # Ex: 0.1348
+    "manual_preco_potencia": None,  # Ex: 0.4498 (preço por dia)
+    "consumo_kwh": 700,
+    "dias_historico": 30,
+    "potencia_kva": 6.90,
+    # Valores de referência para o Indexado e Fallbacks
+    "tar_energia_kwh": 0.0607,
+    "tar_potencia_dia": 0.3436,
+    "tse": 0.0026,
+    "margem_indexado": 0.0150,
+    "url_tarifarios": "https://huggingface.co/spaces/tiagofelicia/simulador-tarifarios-eletricidade/resolve/main/data/csv/Tarifarios_fixos.csv",
+}
 
 # ==============================================================================
-# OMIE — DADOS OFICIAIS
+# ⚡ OBTENÇÃO DINÂMICA OMIE
 # ==============================================================================
 
-def obter_precos_dia_omie(data: date) -> list[float]:
-    """
-    Descarrega o ficheiro oficial do OMIE para uma data e devolve
-    a lista de preços horários de Portugal (€/MWh).
 
-    Fonte: https://www.omie.es  (ficheiros públicos, sem autenticação)
-    Formato das linhas: ANO;MES;DIA;HORA;PRECO_PT;PRECO_ES;*
-    """
-    nome_ficheiro = f"marginalpdbcpt_{data.strftime('%Y%m%d')}.1"
-    url = (
-        "https://www.omie.es/en/file-download"
-        f"?parents=marginalpdbcpt&filename={nome_ficheiro}"
-    )
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Referer":    "https://www.omie.es/",
-    }
-
-    resposta = requests.get(url, headers=headers, timeout=15)
-    resposta.raise_for_status()                          # levanta erro se 4xx/5xx
-    conteudo = resposta.content.decode("latin-1")
-
+def obter_media_omie():
+    print(f"🔎 A calcular média OMIE (últimos {CONFIG['dias_historico']} dias)...")
+    hoje = date.today()
     precos = []
-    for linha in conteudo.splitlines():
-        partes = linha.strip().split(";")
-        # Ignora cabeçalho e linhas de totais/rodapé
-        if len(partes) >= 5 and partes[0].strip().isdigit():
-            try:
-                precos.append(float(partes[4].replace(",", ".")))
-            except ValueError:
-                pass
+    headers = {"User-Agent": "Mozilla/5.0"}
 
-    return precos
-
-
-def obter_media_omie() -> tuple[float, str, str]:
-    """
-    Calcula a média OMIE (Portugal - Simples) dos últimos DIAS_HISTORICO dias,
-    indo directamente à fonte oficial do OMIE.
-    Devolve (media_€_MWh, data_inicio_iso, data_fim_iso).
-    """
-    hoje   = date.today()
-    inicio = hoje - timedelta(days=DIAS_HISTORICO)
-
-    print(f"A consultar OMIE de {inicio.strftime('%d/%m/%Y')} a {hoje.strftime('%d/%m/%Y')}...")
-
-    todos_precos: list[float] = []
-    d = inicio
-    while d <= hoje:
+    for i in range(CONFIG["dias_historico"] + 1):
+        dStr = (hoje - timedelta(days=i)).strftime("%Y%m%d")
+        url = f"https://www.omie.es/en/file-download?parents=marginalpdbcpt&filename=marginalpdbcpt_{dStr}.1"
         try:
-            precos = obter_precos_dia_omie(d)
-            todos_precos.extend(precos)
-        except requests.HTTPError as e:
-            # Dia ainda sem dados (ex.: amanhã) é normal — ignora silenciosamente
-            if e.response.status_code != 404:
-                print(f"  Aviso HTTP {e.response.status_code} para {d}")
-        except Exception as e:
-            print(f"  Aviso: não foi possível obter dados para {d} — {e}")
-        d += timedelta(days=1)
+            r = requests.get(url, headers=headers, timeout=5)
+            if r.status_code == 200:
+                for linha in r.text.splitlines():
+                    p = linha.strip().split(";")
+                    if (
+                        len(p) >= 5
+                        and p[0].strip().isdigit()
+                        and len(p[0].strip()) == 4
+                    ):
+                        precos.append(float(p[4].replace(",", ".")))
+        except Exception:
+            continue
 
-    if not todos_precos:
-        print("  Sem dados disponíveis. A usar valor de fallback.")
-        return 65.04, inicio.isoformat(), hoje.isoformat()
-
-    media = sum(todos_precos) / len(todos_precos)
-    return media, inicio.isoformat(), hoje.isoformat()
+    return sum(precos) / len(precos) if precos else 60.0
 
 
 # ==============================================================================
-# HISTÓRICO EM EXCEL
+# 📊 PROCESSAMENTO
 # ==============================================================================
 
-def guardar_historico_excel(data_inicio: str, data_fim: str, media: float) -> None:
-    """
-    Guarda o registo no ficheiro Excel ao lado do script.
-    Cria o ficheiro (com cabeçalho) se ainda não existir.
-    """
-    nome_ficheiro  = "historico_omie.xlsx"
-    diretorio      = os.path.dirname(os.path.abspath(__file__))
-    caminho        = os.path.join(diretorio, nome_ficheiro)
 
-    if not os.path.exists(caminho):
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "Histórico OMIE"
-        ws.append(["Data Início", "Data Fim", "Média OMIE (€/MWh)"])
+def executar_analise():
+    media_omie = obter_media_omie()
+
+    try:
+        res = requests.get(CONFIG["url_tarifarios"], timeout=20)
+        csv_linhas = res.text.splitlines()
+    except Exception:
+        print("❌ Erro ao descarregar base de dados de tarifários.")
+        return
+
+    reader = csv.reader(csv_linhas)
+    next(reader)
+
+    meu_atual = None
+    melhor_fixo = None
+
+    for row in reader:
+        if len(row) < 11:
+            continue
+        try:
+            nome_csv = row[1].strip()
+            tipo_csv = row[3].strip().lower()
+            pot_csv = float(row[8].replace(",", "."))
+
+            if abs(pot_csv - CONFIG["potencia_kva"]) > 0.05:
+                continue
+
+            # Preços brutos do CSV
+            p_en_csv = float(row[10].replace(",", "."))
+            p_pot_csv = float(row[9].replace(",", "."))
+
+            # Verificar se taxas estão incluídas na linha do CSV
+            tar_en_inc = "true" in row[16].lower()
+            tar_pot_inc = "true" in row[17].lower()
+            tse_inc = "true" in row[18].lower() if len(row) > 18 else False
+
+            # Lógica de Preço: Manual vs CSV
+            # Se CONFIG for None, usa o do CSV. Se houver valor manual, usa o manual.
+            val_en = (
+                CONFIG["manual_preco_kwh"]
+                if CONFIG["manual_preco_kwh"] is not None
+                else p_en_csv
+            )
+            val_pot = (
+                CONFIG["manual_preco_potencia"]
+                if CONFIG["manual_preco_potencia"] is not None
+                else p_pot_csv
+            )
+
+            # Cálculo Final (Soma taxas se não estiverem incluídas no valor)
+            e_final = (
+                val_en
+                + (0 if tar_en_inc else CONFIG["tar_energia_kwh"])
+                + (0 if tse_inc else CONFIG["tse"])
+            )
+            p_final = val_pot + (0 if tar_pot_inc else CONFIG["tar_potencia_dia"])
+
+            custo_total = (e_final * CONFIG["consumo_kwh"]) + (
+                p_final * CONFIG["dias_historico"]
+            )
+            info = {"nome": nome_csv, "custo": custo_total}
+
+            # 1. Identificar o MEU (Pelo Nome)
+            if CONFIG["tarifario_atual_nome"].lower() in nome_csv.lower():
+                if not meu_atual or custo_total < meu_atual["custo"]:
+                    meu_atual = info
+
+            # 2. Identificar o MELHOR FIXO do mercado
+            if "fixo" in tipo_csv:
+                if not melhor_fixo or custo_total < melhor_fixo["custo"]:
+                    melhor_fixo = info
+        except Exception:
+            continue
+
+    # Cálculo Indexado
+    p_kwh_idx = (
+        (media_omie / 1000)
+        + CONFIG["margem_indexado"]
+        + CONFIG["tar_energia_kwh"]
+        + CONFIG["tse"]
+    )
+    custo_idx = (CONFIG["consumo_kwh"] * p_kwh_idx) + (
+        CONFIG["dias_historico"] * CONFIG["tar_potencia_dia"]
+    )
+
+    # --- OUTPUT ---
+    c_atual = meu_atual["custo"] if meu_atual else 0
+    c_fixo = melhor_fixo["custo"] if melhor_fixo else 0
+    ganho = c_atual - custo_idx if c_atual > 0 else 0
+
+    print(f"\n📊 ANÁLISE DE ELETRICIDADE ({date.today().strftime('%d/%m/%Y')})")
+    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    print(f"⚡ MERCADO (OMIE):  {media_omie:.2f} €/MWh")
+    print(f"🏠 ATUAL ({CONFIG['tarifario_atual_nome']}):")
+    if meu_atual:
+        print(f"   • Custo Mensal: {c_atual:.2f}€")
+        print(f"   📉 Ganho vs Indexado: +{ganho:.2f}€")
     else:
-        wb = load_workbook(caminho)
-        ws = wb.active
+        print("   • [Tarifário não encontrado no simulador]")
 
-    ws.append([data_inicio, data_fim, media])
-    wb.save(caminho)
-    print(f"💾 Registo guardado: {caminho}")
+    print(f"\n🏆 MELHOR FIXO: {melhor_fixo['nome'] if melhor_fixo else 'N/A'}")
+    print(f"   • Custo Mensal: {c_fixo:.2f}€")
 
+    print("\n📈 INDEXADO (Média OMIE):")
+    print(f"   • Custo Mensal: {custo_idx:.2f}€")
+    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
-# ==============================================================================
-# ANÁLISE DO PONTO DE EQUILÍBRIO G9
-# ==============================================================================
-
-def analisar_ponto_equilibrio_g9(consumo_mensal: float) -> None:
-
-    # --- Média OMIE (fonte oficial, sem browser) ---
-    media_omie, data_inicio, data_fim = obter_media_omie()
-
-    # --- Guardar histórico ---
-    guardar_historico_excel(data_inicio, data_fim, media_omie)
-
-    # --- Cálculos ---
-    custo_fixo_total   = (consumo_mensal * ENERGIA_FIXO_KWH) + (DIAS_HISTORICO * POTENCIA_DIA_FIXO)
-    termo_potencia_smart = DIAS_HISTORICO * POTENCIA_DIA_SMART_INDEX
-
-    # Preço-limite OMIE (break-even) em €/MWh
-    omie_limite = (
-        (custo_fixo_total - termo_potencia_smart) / consumo_mensal
-        - MARGEM_G9_ESTIMADA
-        - ACESSO_REDES_SMART_INDEX
-    ) * 1000
-
-    # Custo estimado no tarifário indexado
-    preco_kwh_smart   = (media_omie / 1000) + MARGEM_G9_ESTIMADA + ACESSO_REDES_SMART_INDEX
-    custo_smart_total = (consumo_mensal * preco_kwh_smart) + termo_potencia_smart
-
-    # --- Relatório ---
-    print(f"\n{'#'*60}")
-    print(f"  ANÁLISE DE MERCADO OMIE (Últimos {DIAS_HISTORICO} dias)")
-    print(f"{'#'*60}")
-    print(f"Média OMIE extraída:          {media_omie:>8.2f} €/MWh")
-    print(f"Seu Ponto de Equilíbrio:      {omie_limite:>8.2f} €/MWh")
-    print(f"{'-'*60}")
-    print(f"Custo ESTIMADO INDEXADO:      {custo_smart_total:>8.2f} €")
-    print(f"Custo FIXO (Vantagem+):       {custo_fixo_total:>8.2f} €")
-    print(f"{'-'*60}")
-
-    if media_omie > omie_limite:
-        print(f"🚨 ALERTA: A média OMIE está ALTA ({media_omie:.2f} > {omie_limite:.2f}).")
-        print("   O tarifário FIXO é atualmente mais vantajoso.")
+    if ganho > 0:
+        print(f"💡 RECOMENDAÇÃO: Mudar para Indexado poupa-te {ganho:.2f}€/mês.")
     else:
-        print(f"✅ POUPANÇA: A média OMIE está BAIXA ({media_omie:.2f} < {omie_limite:.2f}).")
-        print("   O tarifário INDEXADO é a melhor escolha agora.")
+        print("💡 RECOMENDAÇÃO: O teu tarifário atual está otimizado.")
 
-    print(f"{'#'*60}\n")
-
-
-# ==============================================================================
-# ENTRY POINT
-# ==============================================================================
 
 if __name__ == "__main__":
-    analisar_ponto_equilibrio_g9(MEU_CONSUMO)
+    executar_analise()

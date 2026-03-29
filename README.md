@@ -1,74 +1,42 @@
-# Indexado Vs Fixo — Monitorização OMIE para Consumidores Domésticos
+# Indexado Vs Fixo — Monitorização OMIE
 
-Serviço de monitorização do mercado indexado de eletricidade (OMIE) para consumidores domésticos.
-Com base em `main.py`, o programa é um script CLI que descarrega dados OMIE, calcula médias e gera um relatório/excel.
+Script CLI para monitorizar o mercado indexado de eletricidade (OMIE) para consumidores domésticos.
 
-## Visão geral
+## Como usar (recomendado: Astral UV)
 
-- Calcula a média OMIE dos últimos dias e analisa o ponto de equilíbrio face a um tarifário fixo.
-
-## Requisitos
-
-- Python 3.10+
-- pip ou uv
-- `requests`, `openpyxl` (dependências usadas por `main.py`)
-- Recomenda-se usar um virtualenv
+1. Cria o ambiente virtual com UV:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -U pip
-```
-
-## Instalação (pip / manual)
-
-1. Clonar o repositório e activar o virtualenv:
-
-```bash
-git clone https://github.com/pmpbaptista/indexado-vs-fixo.git
-cd index_monitor
+uv venv
 source .venv/bin/activate
 ```
 
-2. Instalar dependências necessárias (exemplo mínimo):
+2. Instala as dependências:
 
 ```bash
-pip install --upgrade pip setuptools wheel
-pip install requests openpyxl
+uv sync
 ```
 
-Se preferires instalar o pacote localmente (quando houver `pyproject.toml` configurado):
+3. Executa o script:
 
 ```bash
-pip install -e .
+uv run main.py
 ```
 
-## Executar com `uv` (Astral UV manager)
+O script descarrega os dados OMIE e gera a análise automaticamente.
 
-Se utilizas o gestor `uv` da Astral, instala-o e executa o script sob o gestor para facilitar restarts e logs:
+## Configuração
 
-```bash
-pip install uv
-uv run -- python main.py
-```
+Edita os parâmetros no dicionário `CONFIG` no topo do ficheiro `main.py` para ajustar consumo, dias, potências e taxas.
 
-Nota: o comando acima executa `python main.py` gerido pelo `uv`. Ajusta flags do `uv` conforme o teu fluxo (background, logs, etc.).
+---
 
-## Executar diretamente (pip / python)
+## Workflow n8n (automação)
 
-Executar directamente com Python:
+O ficheiro `n8n/analise_omie.json` contém um workflow n8n para automação da análise OMIE.
 
-```bash
-source .venv/bin/activate
-python main.py
-```
+**Como usar:**
 
-Ou, se preferires executar como módulo (quando o package for instalado):
-
-```bash
-python -m index_monitor
-```
-
-## Variáveis / Configuração
-
-O `main.py` contém constantes configuráveis no topo do ficheiro. Ajusta `MEU_CONSUMO` e outros parâmetros conforme necessário.
+1. Importa o ficheiro `n8n/analise_omie.json` no teu n8n.
+2. Altera o URL do webhook (nó "Notificação") para o endpoint desejado (exemplo: o teu serviço de notificações ou chat).
+3. Ativa o workflow para receber análises automáticas.
