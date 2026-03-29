@@ -1,0 +1,177 @@
+{
+  "name": "Análise OMIE - Fixo Break-even",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 6
+            }
+          ]
+        }
+      },
+      "id": "25d64fe8-8824-4c6e-8e08-e2253ce8492d",
+      "name": "Diariamente",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Gera a lista de URLs para os últimos 30 dias\nconst dias = 30;\nconst hoje = new Date();\nconst items = [];\n\nfor (let i = dias; i >= 0; i--) {\n  const d = new Date(hoje);\n  d.setDate(d.getDate() - i);\n  const ano = d.getFullYear();\n  const mes = String(d.getMonth() + 1).padStart(2, '0');\n  const dia = String(d.getDate()).padStart(2, '0');\n  const dataStr = `${ano}${mes}${dia}`;\n  const dataIso = `${ano}-${mes}-${dia}`;\n  items.push({\n    json: {\n      url: `https://www.omie.es/en/file-download?parents=marginalpdbcpt&filename=marginalpdbcpt_${dataStr}.1`,\n      data: dataIso\n    }\n  });\n}\n\nreturn items;"
+      },
+      "id": "f1ca2976-9a47-4d16-ac46-783fb342dcd3",
+      "name": "Gerar URLs 30 dias",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0"
+            },
+            {
+              "name": "Referer",
+              "value": "https://www.omie.es/"
+            }
+          ]
+        },
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 15000
+        }
+      },
+      "id": "c3567691-801a-4306-84ed-540b464d2213",
+      "name": "HTTP Request OMIE",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        448,
+        0
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// ╔══════════════════════════════════════════════════════════════╗\n// ║                    ⚙️  CONFIGURAÇÃO                          ║\n// ║           Só precisas de editar esta secção                  ║\n// ╚══════════════════════════════════════════════════════════════╝\n\nconst CONFIG = {\n\n  consumo_kwh: 700,   // kWh/mês\n  dias:         30,   // dias do período de faturação\n\n  // ── Tarifas reguladas ERSE 2026 ────────────────────────────\n  // Atualizar em janeiro de cada ano\n  // Fonte: https://www.tiagofelicia.pt/tarifas-acesso-redes.html\n  tar: {\n    energia_kwh:  0.0607,   // €/kWh — tarifa simples BTN\n    potencia_dia: 0.3436,   // €/dia — 6.9 kVA (alterar se mudares de potência)\n  },\n\n  // ── Tarifário FIXO ─────────────────────────────────────────\n  // Preço por kWh e por dia contratados com o comercializador\n  fixo: {\n    nome:         \"G9 Vantagem+\",\n    energia_kwh:  0.1348,   // €/kWh  — componente energia do contrato\n    potencia_dia: 0.4498,   // €/dia  — componente potência do contrato\n  },\n\n  // ── Tarifário INDEXADO (OMIE) ───────────────────────────────\n  // A TAR (tar.energia_kwh + tar.potencia_dia) é sempre somada por cima\n  indexado: {\n    nome:       \"G9 Smart Index\",\n    margem_kwh: 0.0150,     // €/kWh  — margem do comercializador\n    // Outros encargos fixos do comercializador (GGS, Fadeg, etc.) — €/kWh\n    // Deixar a 0 se já estiverem incluídos na margem ou não se aplicarem\n    outros_kwh: 0.0000,\n  },\n\n};\n\n// ╔══════════════════════════════════════════════════════════════╗\n// ║            NÃO É NECESSÁRIO EDITAR ABAIXO DAQUI             ║\n// ╚══════════════════════════════════════════════════════════════╝\n\n// ── Parse dos dados OMIE ──────────────────────────────────────\nconst todosPrecos = [];\n\nfor (const item of $input.all()) {\n  const texto = item.json.data;\n  if (!texto || typeof texto !== \"string\") continue;\n  for (const linha of texto.split(\"\\n\")) {\n    const partes = linha.trim().split(\";\");\n    if (partes.length >= 5 && /^\\d{4}$/.test(partes[0].trim())) {\n      const preco = parseFloat(partes[4].replace(\",\", \".\"));\n      if (!isNaN(preco)) todosPrecos.push(preco);\n    }\n  }\n}\n\nif (todosPrecos.length === 0) {\n  return [{ json: { erro: \"Sem dados OMIE disponíveis\", media_omie: null } }];\n}\n\n// ── Cálculos ──────────────────────────────────────────────────\nconst { consumo_kwh, dias, tar, fixo, indexado } = CONFIG;\n\nconst mediaOmie = todosPrecos.reduce((a, b) => a + b, 0) / todosPrecos.length;\n\nconst custoFixo = (consumo_kwh * fixo.energia_kwh) + (dias * fixo.potencia_dia);\n\nconst precoKwhIndexado = (mediaOmie / 1000) + indexado.margem_kwh + indexado.outros_kwh + tar.energia_kwh;\nconst custoIndexado    = (consumo_kwh * precoKwhIndexado) + (dias * tar.potencia_dia);\n\nconst breakeven = (\n  (custoFixo - dias * tar.potencia_dia) / consumo_kwh\n  - indexado.margem_kwh\n  - indexado.outros_kwh\n  - tar.energia_kwh\n) * 1000;\n\nconst poupanca     = Math.abs(custoFixo - custoIndexado);\nconst omieAlta     = mediaOmie > breakeven;\nconst recomendacao = omieAlta ? fixo.nome : indexado.nome;\nconst r            = (v) => Math.round(v * 100) / 100;\n\n// ── Output ────────────────────────────────────────────────────\nreturn [{\n  json: {\n    data_analise:           new Date().toISOString().split(\"T\")[0],\n    media_omie_eur_mwh:     r(mediaOmie),\n    breakeven_eur_mwh:      r(breakeven),\n    [`custo_${fixo.nome.toLowerCase().replace(/\\W+/g,\"_\")}_eur`]:     r(custoFixo),\n    [`custo_${indexado.nome.toLowerCase().replace(/\\W+/g,\"_\")}_eur`]: r(custoIndexado),\n    poupanca_eur:           r(poupanca),\n    recomendacao,\n    omie_alta:              omieAlta,\n    num_precos_lidos:       todosPrecos.length,\n    resumo: omieAlta\n      ? `🚨 OMIE alta (${r(mediaOmie)} > ${r(breakeven)} €/MWh) — ${recomendacao} poupa ${r(poupanca)} €`\n      : `✅ OMIE baixa (${r(mediaOmie)} < ${r(breakeven)} €/MWh) — ${recomendacao} poupa ${r(poupanca)} €`,\n  }\n}];"
+      },
+      "id": "b8ee454f-c1be-4b28-b5f4-ddaae0b4b1d7",
+      "name": "Cálculos G9",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://example.com/webhook",  // <-- Substituir pela URL do webhook do Discord ou outro serviço
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "content",
+              "value": "={{ $json.resumo }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        880,
+        0
+      ],
+      "id": "4074de76-2014-40be-88a2-66b094f4bbf5",
+      "name": "HTTP Request"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Diariamente": {
+      "main": [
+        [
+          {
+            "node": "Gerar URLs 30 dias",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gerar URLs 30 dias": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request OMIE",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request OMIE": {
+      "main": [
+        [
+          {
+            "node": "Cálculos G9",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cálculos G9": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "aac427d7-7116-49ee-a1d5-c2429bba2335",
+  "meta": {
+    "instanceId": "85166c297844604796117af68b3e20aee5a50f4df203aa5e94632824940b30e9"
+  },
+  "id": "DJLDuhebZFH2bbR5",
+  "tags": []
+}
