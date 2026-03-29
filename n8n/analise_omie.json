@@ -3,106 +3,23 @@
   "nodes": [
     {
       "parameters": {
-        "jsCode": "// Gera a lista de URLs para os últimos 30 dias\nconst dias = 30;\nconst hoje = new Date();\nconst items = [];\n\nfor (let i = dias; i >= 0; i--) {\n  const d = new Date(hoje);\n  d.setDate(d.getDate() - i);\n  const ano = d.getFullYear();\n  const mes = String(d.getMonth() + 1).padStart(2, '0');\n  const dia = String(d.getDate()).padStart(2, '0');\n  const dataStr = `${ano}${mes}${dia}`;\n  items.push({\n    json: {\n      tipo: 'omie',\n      url: `https://www.omie.es/en/file-download?parents=marginalpdbcpt&filename=marginalpdbcpt_${dataStr}.1`\n    }\n  });\n}\n\nreturn items;"
+        "rule": { "interval": [{ "triggerAtHour": 6 }] }
       },
-      "id": "2d6082cb-4dda-4c29-a8b4-b6bb88857e20",
+      "id": "node-schedule",
+      "name": "Diariamente",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Gera a lista de URLs OMIE para os últimos 30 dias\nconst dias = 30;\nconst hoje = new Date();\nconst items = [];\n\nfor (let i = dias; i >= 0; i--) {\n  const d = new Date(hoje);\n  d.setDate(d.getDate() - i);\n  const ano = d.getFullYear();\n  const mes = String(d.getMonth() + 1).padStart(2, '0');\n  const dia = String(d.getDate()).padStart(2, '0');\n  items.push({\n    json: {\n      url: `https://www.omie.es/en/file-download?parents=marginalpdbcpt&filename=marginalpdbcpt_${ano}${mes}${dia}.1`\n    }\n  });\n}\n\nreturn items;"
+      },
+      "id": "node-gerar-urls",
       "name": "Gerar URLs OMIE",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        1248,
-        112
-      ]
-    },
-    {
-      "parameters": {
-        "jsCode": "// Agrega todos os preços OMIE num único item\nconst todosPrecos = [];\n\nfor (const item of $input.all()) {\n  const texto = item.json.data;\n  if (!texto || typeof texto !== 'string') continue;\n  for (const linha of texto.split('\\n')) {\n    const partes = linha.trim().split(';');\n    if (partes.length >= 5 && /^\\d{4}$/.test(partes[0].trim())) {\n      const preco = parseFloat(partes[4].replace(',', '.'));\n      if (!isNaN(preco)) todosPrecos.push(preco);\n    }\n  }\n}\n\nif (todosPrecos.length === 0) {\n  return [{ json: { erro: 'Sem dados OMIE', todosPrecos: [] } }];\n}\n\nconst mediaOmie = todosPrecos.reduce((a, b) => a + b, 0) / todosPrecos.length;\n\nreturn [{\n  json: {\n    media_omie: mediaOmie,\n    num_precos: todosPrecos.length\n  }\n}];"
-      },
-      "id": "07bee5c2-2e94-44b6-9969-48b6cd7d6b17",
-      "name": "Agregar OMIE",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        1696,
-        112
-      ]
-    },
-    {
-      "parameters": {
-        "url": "https://huggingface.co/spaces/tiagofelicia/simulador-tarifarios-eletricidade/resolve/main/data/csv/Tarifarios_fixos.csv",
-        "options": {
-          "response": {
-            "response": {
-              "responseFormat": "text"
-            }
-          },
-          "timeout": 30000
-        }
-      },
-      "id": "746235ef-d21c-4d46-9872-64d5b9079aeb",
-      "name": "HTTP Request CSV Tarifários",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        1904,
-        112
-      ]
-    },
-    {
-      "parameters": {
-        "jsCode": "// ╔══════════════════════════════════════════════════════════════╗\n// ║                    ⚙️  CONFIGURAÇÃO                          ║\n// ╚══════════════════════════════════════════════════════════════╝\n\nconst CONFIG = {\n  tarifario_atual_nome: \"G9 | Vantagem+\", \n  consumo_kwh: 700,   \n  dias:         30,   \n  potencia_kva: 6.90,     \n  ciclo: \"Simples\", \n\n  // Valores ERSE 2026\n  tar: { energia_kwh: 0.0607, potencia_dia: 0.3436 },\n  indexado: { margem_kwh: 0.0150 } \n};\n\n// ╔══════════════════════════════════════════════════════════════╗\n// ║            LÓGICA DE PROCESSAMENTO (GANHOS)                 ║\n// ╚══════════════════════════════════════════════════════════════╝\n\nconst TSE = 0.0026; \nconst r = (v) => Math.round(v * 100) / 100;\nconst norm = (str) => (str || \"\").toLowerCase().normalize(\"NFD\").replace(/[\\u0300-\\u036f]/g, \"\").trim();\n\nfunction parseCSVLine(line) {\n  const columns = [];\n  let current = '';\n  let inQuotes = false;\n  for (let i = 0; i < line.length; i++) {\n    const char = line[i];\n    if (char === '\"') inQuotes = !inQuotes;\n    else if (char === ',' && !inQuotes) {\n      columns.push(current.trim());\n      current = '';\n    } else {\n      current += char;\n    }\n  }\n  columns.push(current.trim());\n  return columns;\n}\n\nconst omieData = $('Agregar OMIE').first().json;\nconst csvTexto = $input.first().json.data;\nconst mediaOmie = omieData.media_omie;\n\nfunction processarCSV(csv) {\n  const linhas = csv.split('\\n').filter(l => l.length > 50);\n  let fixos = [];\n  let meuAtual = null;\n\n  for (let i = 1; i < linhas.length; i++) {\n    const col = parseCSVLine(linhas[i]);\n    if (col.length < 11) continue;\n\n    const nomeCompleto = col[1].replace(/\"/g, '');\n    const tipo         = col[3].replace(/\"/g, '');\n    const potKva       = parseFloat(col[8].replace(',', '.'));\n    \n    if (isNaN(potKva) || Math.abs(potKva - CONFIG.potencia_kva) > 0.1) continue;\n\n    const pEnergiaBase = parseFloat(col[10].replace(',', '.'));\n    const pPotenciaBase = parseFloat(col[9].replace(',', '.'));\n    \n    if (isNaN(pEnergiaBase) || pEnergiaBase <= 0) continue;\n\n    const tarEnIncluida = (col[16] || \"\").toLowerCase().includes('true');\n    const tarPotIncluida = (col[17] || \"\").toLowerCase().includes('true');\n    const tseIncluida = (col[18] || \"\").toLowerCase().includes('true');\n\n    const eFinal = pEnergiaBase + (tarEnIncluida ? 0 : CONFIG.tar.energia_kwh) + (tseIncluida ? 0 : TSE);\n    const pFinal = pPotenciaBase + (tarPotIncluida ? 0 : CONFIG.tar.potencia_dia);\n    \n    const custoMensal = (eFinal * CONFIG.consumo_kwh) + (pFinal * CONFIG.dias);\n    const info = { nome: nomeCompleto, custo: custoMensal };\n\n    if (norm(nomeCompleto).includes(norm(CONFIG.tarifario_atual_nome))) {\n      if (!meuAtual || custoMensal < meuAtual.custo) meuAtual = info;\n    }\n\n    if (norm(tipo).includes('fixo')) {\n      fixos.push(info);\n    }\n  }\n\n  return {\n    atual: meuAtual,\n    melhorFixo: fixos.sort((a,b) => a.custo - b.custo)[0]\n  };\n}\n\nconst resultado = processarCSV(csvTexto);\n\n// Cálculo Indexado (Baseado na Média OMIE)\nconst precoKwhIndexado = (mediaOmie / 1000) + CONFIG.indexado.margem_kwh + CONFIG.tar.energia_kwh + TSE;\nconst custoIndexado = (CONFIG.consumo_kwh * precoKwhIndexado) + (CONFIG.dias * CONFIG.tar.potencia_dia);\n\nconst melhorFixo = resultado.melhorFixo || { nome: \"Não encontrado\", custo: 0 };\nconst meuCusto = resultado.atual ? resultado.atual.custo : 0;\n\n// Cálculos de Ganho (Diferença para o Indexado)\nconst ganhoAtualVsIndexado = meuCusto > 0 ? meuCusto - custoIndexado : 0;\nconst ganhoFixoVsIndexado = melhorFixo.custo > 0 ? melhorFixo.custo - custoIndexado : 0;\n\n// RESUMO\nlet resumo = `📊 *ANÁLISE DE ELETRICIDADE* (${new Date().toLocaleDateString('pt-PT')})\\n`;\nresumo += `━━━━━━━━━━━━━━━━━━━━\\n\\n`;\nresumo += `⚡ *MERCADO (OMIE):*\\n• Média 30 dias: ${r(mediaOmie)} €/MWh\\n\\n`;\n\nif (resultado.atual) {\n  resumo += `🏠 *TEU TARIFÁRIO ATUAL:*\\n• ${resultado.atual.nome}\\n• Custo: *${r(meuCusto)}€*\\n`;\n  resumo += `📉 *Ganho se mudar para Indexado:* +${r(ganhoAtualVsIndexado)}€/mês\\n\\n`;\n}\n\nresumo += `🏆 *MELHOR OPÇÃO FIXA:*\\n• ${melhorFixo.nome}\\n• Custo: ${r(melhorFixo.custo)}€\\n`;\nresumo += `📉 *Diferença para o Indexado:* +${r(ganhoFixoVsIndexado)}€/mês\\n\\n`;\n\nresumo += `📈 *OPÇÃO INDEXADA (Média OMIE):*\\n• Custo estimado: *${r(custoIndexado)}€*\\n\\n`;\n\nresumo += `━━━━━━━━━━━━━━━━━━━━\\n💡 *RECOMENDAÇÃO:*\\n`;\nresumo += `O Indexado é a opção mais barata. Mudar do teu atual para o Indexado poupa-te **${r(ganhoAtualVsIndexado)}€** por mês.`;\n\nreturn [{ json: { \n  media_omie: r(mediaOmie), \n  custo_meu_atual: r(meuCusto),\n  melhor_fixo_nome: melhorFixo.nome,\n  custo_melhor_fixo: r(melhorFixo.custo),\n  custo_indexado: r(custoIndexado),\n  ganho_mensal: r(ganhoAtualVsIndexado),\n  resumo \n} }];"
-      },
-      "id": "7073ec8b-0235-45ab-9be9-0686eada8a89",
-      "name": "Cálculos",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        2128,
-        112
-      ]
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "https://api.example.com/notify", # Substitua pela URL real do endpoint de notificação
-        "sendBody": true,
-        "bodyParameters": {
-          "parameters": [
-            {
-              "name": "content",
-              "value": "={{ $json.resumo }}"
-            }
-          ]
-        },
-        "options": {}
-      },
-      "id": "e62131b0-acbd-40e0-8e42-1405fc098b52",
-      "name": "Notificação",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.4,
-      "position": [
-        2352,
-        112
-      ]
-    },
-    {
-      "parameters": {
-        "rule": {
-          "interval": [
-            {
-              "triggerAtHour": 6
-            }
-          ]
-        }
-      },
-      "id": "fe5d81fb-60e3-4493-932c-b843d415808e",
-      "name": "Diariamente1",
-      "type": "n8n-nodes-base.scheduleTrigger",
-      "typeVersion": 1.2,
-      "position": [
-        1024,
-        112
-      ]
+      "position": [220, 300]
     },
     {
       "parameters": {
@@ -110,115 +27,98 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            {
-              "name": "User-Agent",
-              "value": "Mozilla/5.0"
-            },
-            {
-              "name": "Referer",
-              "value": "https://www.omie.es/"
-            }
+            { "name": "User-Agent", "value": "Mozilla/5.0" },
+            { "name": "Referer",    "value": "https://www.omie.es/" }
           ]
         },
         "options": {
           "allowUnauthorizedCerts": true,
-          "response": {
-            "response": {
-              "responseFormat": "text"
-            }
-          },
+          "response": { "response": { "responseFormat": "text" } },
           "timeout": 15000
         }
       },
-      "id": "cc42b802-6450-4aeb-a314-02d4e98feeb2",
-      "name": "HTTP Request OMIE1",
+      "id": "node-http-omie",
+      "name": "HTTP Request OMIE",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [
-        1472,
-        112
-      ],
+      "position": [440, 300],
       "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Agrega os 31 ficheiros OMIE num único item com a média\nconst todosPrecos = [];\n\nfor (const item of $input.all()) {\n  const texto = item.json.data;\n  if (!texto || typeof texto !== 'string') continue;\n  for (const linha of texto.split('\\n')) {\n    const partes = linha.trim().split(';');\n    // Formato OMIE: ANO;MES;DIA;HORA;PRECO_PT;PRECO_ES\n    if (partes.length >= 5 && /^\\d{4}$/.test(partes[0].trim())) {\n      const preco = parseFloat(partes[4].replace(',', '.'));\n      if (!isNaN(preco)) todosPrecos.push(preco);\n    }\n  }\n}\n\nif (todosPrecos.length === 0) {\n  return [{ json: { erro: 'Sem dados OMIE disponíveis' } }];\n}\n\nconst media = todosPrecos.reduce((a, b) => a + b, 0) / todosPrecos.length;\n\nreturn [{\n  json: {\n    media_omie_mwh: media,\n    num_precos: todosPrecos.length\n  }\n}];"
+      },
+      "id": "node-agregar-omie",
+      "name": "Agregar OMIE",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://huggingface.co/spaces/tiagofelicia/simulador-tarifarios-eletricidade/resolve/main/data/csv/Tarifarios_fixos.csv",
+        "options": {
+          "response": { "response": { "responseFormat": "text" } },
+          "timeout": 30000
+        }
+      },
+      "id": "node-http-csv",
+      "name": "HTTP Request CSV Tarifários",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [880, 300],
+      "continueOnFail": false
+    },
+    {
+      "parameters": {
+        "jsCode": "// ╔══════════════════════════════════════════════════════════════════╗\n// ║                      ⚙️  CONFIGURAÇÃO                            ║\n// ║              Só precisas de editar esta secção                   ║\n// ╚══════════════════════════════════════════════════════════════════╝\n\nconst CONFIG = {\n\n  // ── Consumo e contrato ──────────────────────────────────────────\n  consumo_kwh:  700,    // kWh/mês\n  dias:          30,    // dias do período de faturação\n  potencia_kva:  6.90,  // kVA contratados (filtra tarifários do CSV)\n  ciclo: \"Simples\",     // \"Simples\" | \"Bi-horário\" | \"Tri-horário\"\n\n  // ── Tarifário FIXO ──────────────────────────────────────────────\n  // null  → escolhe automaticamente o mais barato do CSV do Tiago Felícia\n  // {...} → usa estes valores directamente (ignora o CSV)\n  //\n  // ATENÇÃO: os valores do CSV já incluem TAR (tar_incluida = true na maioria).\n  // Se colocares valores manuais, usa os valores FINAIS da tua fatura\n  // (ou seja, com TAR e TSE já incluídas), e coloca tar_ja_incluida: true.\n  //\n  // Exemplo manual:\n  // fixo_manual: {\n  //   nome:           \"G9 | Vantagem+\",\n  //   energia_kwh:    0.1348,  // valor bruto do CSV (inclui TAR + TSE)\n  //   potencia_dia:   0.4498,  // valor bruto do CSV (inclui TAR)\n  //   tar_en_incluida:  true,\n  //   tar_pot_incluida: true,\n  //   tse_incluida:     true,\n  // },\n  fixo_manual: null,\n\n  // ── Filtros para escolha automática do melhor fixo ──────────────\n  // (irrelevante se fixo_manual estiver preenchido)\n  // Usa string vazia \"\" para ignorar esse filtro.\n  filtros: {\n    segmento:  \"Residencial\",     // \"Residencial\" | \"Empresarial\" | \"\"\n    faturacao: \"eletrónica\",      // palavra parcial (ex: \"eletrónica\", \"papel\")\n    pagamento: \"Débito\",          // palavra parcial (ex: \"Débito\", \"Multibanco\")\n  },\n\n  // ── Tarifário INDEXADO (OMIE) ────────────────────────────────────\n  // Valores específicos do contrato indexado.\n  // A TAR e TSE são SEMPRE adicionadas por cima no indexado (não estão incluídas).\n  indexado: {\n    nome:       \"G9 | Smart Index\",\n    // Margem do comercializador em €/kWh (G9_CGS + G9_AC do contrato)\n    margem_kwh: 0.0150,\n    // Fator de perdas de rede (G9_FA — tipicamente entre 1.0 e 1.20)\n    // Verifica no teu contrato. G9 usa ~1.16 no período de inverno.\n    // Se não souberes, usa 1.0 para estimativa conservadora.\n    fator_perdas: 1.0,\n  },\n\n  // ── Tarifas reguladas ERSE 2026 ──────────────────────────────────\n  // Atualizar anualmente em Janeiro.\n  // Fonte: https://www.tiagofelicia.pt/tarifas-acesso-redes.html\n  tar: {\n    energia_kwh:  0.0607,   // €/kWh — tarifa simples BTN\n    potencia_dia: 0.3436,   // €/dia — para 6.9 kVA (alterar se mudares de potência)\n  },\n\n};\n\n// ╔══════════════════════════════════════════════════════════════════╗\n// ║          NÃO É NECESSÁRIO EDITAR ABAIXO DAQUI                   ║\n// ╚══════════════════════════════════════════════════════════════════╝\n\n// Constantes reguladas ERSE 2026 (não mudam a meio do ano)\nconst TSE = 0.0026;  // €/kWh — financiamento Tarifa Social Electricidade\n\nconst r4 = (v) => Math.round(v * 10000) / 10000;\nconst r2 = (v) => Math.round(v * 100) / 100;\n\n// ── Normalização de texto para comparações ─────────────────────\nconst norm = (s) => (s || '')\n  .toLowerCase()\n  .normalize('NFD')\n  .replace(/[\\u0300-\\u036f]/g, '')\n  .trim();\n\n// ── Parser CSV robusto (lida com campos entre aspas) ────────────\nfunction parseCSVLine(linha) {\n  const cols = [];\n  let cur = '';\n  let inQ = false;\n  for (const ch of linha) {\n    if (ch === '\"') { inQ = !inQ; }\n    else if (ch === ',' && !inQ) { cols.push(cur.trim()); cur = ''; }\n    else { cur += ch; }\n  }\n  cols.push(cur.trim());\n  return cols;\n}\n\nconst parseBool = (v) => {\n  const s = (v || '').toLowerCase().trim();\n  return s === 'true' || s === 'sim' || s === '1';\n};\nconst parseNum = (v) => parseFloat((v || '0').replace(',', '.')) || 0;\n\n// ── Leitura dos dados dos nós anteriores ───────────────────────\nconst omieData = $('Agregar OMIE').first().json;\nif (omieData.erro) {\n  return [{ json: { erro: omieData.erro } }];\n}\n\nconst mediaOmie_MWh = omieData.media_omie_mwh; // €/MWh\nconst mediaOmie_kWh = mediaOmie_MWh / 1000;    // €/kWh\nconst csvTexto = $input.first().json.data;\n\n// ── Parse do CSV e cálculo do melhor fixo ──────────────────────\n//\n// Lógica idêntica ao simulador do Tiago Felícia (calculos.js):\n//\n// 1. Lê preco_energia_simples e preco_potencia_dia do CSV (valores brutos)\n// 2. Se tar_incluida_energia=true → energia_comercial = bruto - TAR_en\n//    Se tar_incluida_energia=false → energia_comercial = bruto\n// 3. energia_final = energia_comercial + TAR_en + (tse_incluida ? 0 : TSE)\n// 4. Mesmo processo para potência\n// 5. Custo = energia_final * consumo + potencia_final * dias\n//\nfunction obterTarifarios(csvTexto) {\n  const linhas = csvTexto.split('\\n').map(l => l.trim()).filter(Boolean);\n  if (linhas.length < 2) throw new Error('CSV vazio ou inválido');\n\n  // Mapear cabeçalho → índice de coluna\n  const cab = parseCSVLine(linhas[0]).map(c => c.replace(/\"/g, '').trim().toLowerCase());\n  const col = (nome) => cab.findIndex(c => c.includes(nome.toLowerCase()));\n\n  // Índices das colunas relevantes (nomes do CSV do Tiago Felícia)\n  const C = {\n    comercializador: col('comercializador'),\n    nome:            col('nome'),\n    tipo:            col('tipo'),\n    ciclo:           col('opcao_horaria'),\n    potKva:          col('potencia_kva'),\n    energia:         col('preco_energia_simples'),\n    potDia:          col('preco_potencia_dia'),\n    tarEnIncl:       col('tar_incluida_energia'),\n    tarPotIncl:      col('tar_incluida_potencia'),\n    tseIncl:         col('financiamento_tse'),\n    segmento:        col('segmento'),\n    faturacao:       col('faturacao'),\n    pagamento:       col('pagamento'),\n    descFatura:      col('desconto_fatura'),\n  };\n\n  const cicloChave = norm(CONFIG.ciclo).split('-')[0].split(' ')[0]; // \"simples\", \"bi\", \"tri\"\n\n  const fixos = [];\n\n  for (let i = 1; i < linhas.length; i++) {\n    const cols = parseCSVLine(linhas[i]);\n    if (cols.length < 10) continue;\n\n    const tipo    = (cols[C.tipo]    || '').replace(/\"/g, '').trim();\n    const ciclo   = norm(cols[C.ciclo]   || '');\n    const potKva  = parseNum(cols[C.potKva]);\n    const segmento  = norm(cols[C.segmento]  || '');\n    const faturacao = norm(cols[C.faturacao] || '');\n    const pagamento = norm(cols[C.pagamento] || '');\n\n    // ── Filtros obrigatórios ──\n    if (norm(tipo) !== 'fixo') continue;\n    if (Math.abs(potKva - CONFIG.potencia_kva) > 0.1) continue;\n    if (!ciclo.includes(cicloChave)) continue;\n\n    // ── Filtros opcionais ──\n    const f = CONFIG.filtros;\n    if (f.segmento === 'Residencial' && !segmento.includes('domestico')) continue;\n    if (f.segmento === 'Empresarial' && !segmento.includes('nao domestico') && !segmento.includes('nao-domestico')) continue;\n    if (f.faturacao && !faturacao.includes(norm(f.faturacao))) continue;\n    if (f.pagamento && !pagamento.includes(norm(f.pagamento))) continue;\n\n    // ── Leitura dos preços brutos ──\n    const energiaBruta = parseNum(cols[C.energia]);\n    const potDiaBruta  = parseNum(cols[C.potDia]);\n    if (energiaBruta <= 0 || potDiaBruta <= 0) continue;\n\n    const tarEnIncl  = parseBool(cols[C.tarEnIncl]);\n    const tarPotIncl = parseBool(cols[C.tarPotIncl]);\n    const tseIncl    = parseBool(cols[C.tseIncl]);\n\n    // ── Normalização exacta (igual ao simulador) ──\n    // Extrai componente comercial (sem TAR)\n    const energiaComercial = tarEnIncl\n      ? energiaBruta - CONFIG.tar.energia_kwh\n      : energiaBruta;\n\n    const potComercial = tarPotIncl\n      ? potDiaBruta - CONFIG.tar.potencia_dia\n      : potDiaBruta;\n\n    // Re-adiciona TAR regulada + TSE se não incluída\n    const energiaFinal = energiaComercial + CONFIG.tar.energia_kwh + (tseIncl ? 0 : TSE);\n    const potFinal     = potComercial     + CONFIG.tar.potencia_dia;\n\n    // Desconto de fatura (se existir)\n    const descFatura = parseNum(cols[C.descFatura] || '0');\n    const descTotal  = descFatura * (CONFIG.dias / 30); // proporcional\n\n    const custoEnergia = energiaFinal * CONFIG.consumo_kwh;\n    const custoPot     = potFinal     * CONFIG.dias;\n    const custoTotal   = custoEnergia + custoPot - descTotal;\n\n    fixos.push({\n      comercializador:  (cols[C.comercializador] || '').replace(/\"/g, '').trim(),\n      nome:             (cols[C.nome]            || '').replace(/\"/g, '').trim(),\n      energia_kwh:      r4(energiaFinal),\n      potencia_dia:     r4(potFinal),\n      energia_comercial_kwh: r4(energiaComercial),\n      pot_comercial_dia:     r4(potComercial),\n      desconto_mes:     descFatura,\n      custo_estimado:   r2(custoTotal),\n      tar_en_incl:      tarEnIncl,\n      tar_pot_incl:     tarPotIncl,\n      tse_incl:         tseIncl,\n    });\n  }\n\n  if (fixos.length === 0) {\n    throw new Error(\n      `Nenhum tarifário fixo encontrado para ${CONFIG.potencia_kva} kVA / ` +\n      `${CONFIG.ciclo} com filtros: ${JSON.stringify(CONFIG.filtros)}`\n    );\n  }\n\n  fixos.sort((a, b) => a.custo_estimado - b.custo_estimado);\n  return fixos;\n}\n\n// ── Obter melhor fixo ──────────────────────────────────────────\nlet melhorFixo;\nlet fonte;\n\nif (CONFIG.fixo_manual) {\n  // Manual: normaliza da mesma forma\n  const m = CONFIG.fixo_manual;\n  const tarEnIncl  = m.tar_en_incluida !== false;\n  const tarPotIncl = m.tar_pot_incluida !== false;\n  const tseIncl    = m.tse_incluida !== false;\n\n  const energiaComercial = tarEnIncl ? m.energia_kwh - CONFIG.tar.energia_kwh : m.energia_kwh;\n  const potComercial     = tarPotIncl ? m.potencia_dia - CONFIG.tar.potencia_dia : m.potencia_dia;\n  const energiaFinal     = energiaComercial + CONFIG.tar.energia_kwh + (tseIncl ? 0 : TSE);\n  const potFinal         = potComercial + CONFIG.tar.potencia_dia;\n\n  melhorFixo = {\n    nome:          m.nome,\n    comercializador: '',\n    energia_kwh:   r4(energiaFinal),\n    potencia_dia:  r4(potFinal),\n    custo_estimado: r2(energiaFinal * CONFIG.consumo_kwh + potFinal * CONFIG.dias),\n  };\n  fonte = 'manual';\n} else {\n  let todos;\n  try {\n    todos = obterTarifarios(csvTexto);\n  } catch (e) {\n    return [{ json: { erro: e.message } }];\n  }\n  melhorFixo = todos[0];\n  fonte = 'automatico (CSV Tiago Felícia)';\n}\n\n// ── Cálculo do custo indexado ──────────────────────────────────\n//\n// Lógica do simulador para G9 Smart Index (e equivalentes):\n//   preço_kwh = OMIE_€/kWh * fator_perdas + margem + TAR_energia + TSE\n//   custo     = preço_kwh * consumo + TAR_potencia * dias\n//\n// A TAR e TSE são SEMPRE adicionadas no indexado (tar_e_incl = false no CSV)\n// O fator_perdas compensa as perdas de rede (varia ~1.10-1.20 conforme contrato)\n//\nconst precoKwhIndexado = (\n  mediaOmie_kWh * CONFIG.indexado.fator_perdas\n  + CONFIG.indexado.margem_kwh\n  + CONFIG.tar.energia_kwh\n  + TSE\n);\nconst custoIndexado = (\n  CONFIG.consumo_kwh * precoKwhIndexado\n  + CONFIG.dias * CONFIG.tar.potencia_dia\n);\n\n// ── Break-even (a partir de que OMIE o fixo é mais barato) ─────\n//\n// Resolve: custo_fixo = custo_indexado\n// melhorFixo.custo = consumo * (OMIE_kWh * perdas + margem + TAR + TSE) + dias * TAR_pot\n// OMIE_kWh_breakeven = (custo_fixo/consumo - margem - TAR - TSE) / perdas\n//\nconst custoFixo = melhorFixo.custo_estimado;\nconst breakeven_kWh = (\n  (custoFixo - CONFIG.dias * CONFIG.tar.potencia_dia) / CONFIG.consumo_kwh\n  - CONFIG.indexado.margem_kwh\n  - CONFIG.tar.energia_kwh\n  - TSE\n) / CONFIG.indexado.fator_perdas;\nconst breakeven_MWh = r2(breakeven_kWh * 1000);\n\nconst poupanca   = r2(Math.abs(custoFixo - custoIndexado));\nconst fixoMaisBarato = custoFixo <= r2(custoIndexado);\nconst recomendacao   = fixoMaisBarato ? melhorFixo.nome : CONFIG.indexado.nome;\n\n// ── Resumo formatado ───────────────────────────────────────────\nconst data = new Date().toLocaleDateString('pt-PT');\nconst maisBaratoLabel = fixoMaisBarato\n  ? `🏆 FIXO mais barato — poupa ${poupanca}€`\n  : `🏆 INDEXADO mais barato — poupa ${poupanca}€`;\n\nlet resumo = `📊 *ANÁLISE OMIE* (${data})\\n`;\nresumo += `━━━━━━━━━━━━━━━━━━━━\\n\\n`;\nresumo += `⚡ *MERCADO OMIE (últimos 30 dias):*\\n`;\nresumo += `• Média: *${r2(mediaOmie_MWh)} €/MWh*\\n`;\nresumo += `• Break-even: ${breakeven_MWh} €/MWh\\n\\n`;\nresumo += `🔒 *MELHOR FIXO (${fonte}):*\\n`;\nresumo += `• ${melhorFixo.nome}\\n`;\nresumo += `• Energia: ${melhorFixo.energia_kwh} €/kWh | Potência: ${melhorFixo.potencia_dia} €/dia\\n`;\nresumo += `• Custo estimado: *${custoFixo}€*\\n\\n`;\nresumo += `📈 *INDEXADO (${CONFIG.indexado.nome}):*\\n`;\nresumo += `• Preço kWh: ${r4(precoKwhIndexado)} €/kWh\\n`;\nresumo += `• Custo estimado: *${r2(custoIndexado)}€*\\n\\n`;\nresumo += `━━━━━━━━━━━━━━━━━━━━\\n`;\nresumo += `💡 *${maisBaratoLabel}*\\n`;\nresumo += `   Recomendação: *${recomendacao}*`;\n\nreturn [{\n  json: {\n    data_analise:              data,\n    media_omie_eur_mwh:        r2(mediaOmie_MWh),\n    breakeven_eur_mwh:         breakeven_MWh,\n    omie_acima_breakeven:      mediaOmie_MWh > breakeven_MWh,\n    // Melhor fixo\n    melhor_fixo_nome:          melhorFixo.nome,\n    melhor_fixo_comercializador: melhorFixo.comercializador || '',\n    melhor_fixo_fonte:         fonte,\n    melhor_fixo_energia_kwh:   melhorFixo.energia_kwh,\n    melhor_fixo_potencia_dia:  melhorFixo.potencia_dia,\n    custo_melhor_fixo_eur:     custoFixo,\n    // Indexado\n    indexado_nome:             CONFIG.indexado.nome,\n    indexado_preco_kwh:        r4(precoKwhIndexado),\n    custo_indexado_eur:        r2(custoIndexado),\n    // Comparação\n    poupanca_eur:              poupanca,\n    recomendacao:              recomendacao,\n    fixo_mais_barato:          fixoMaisBarato,\n    num_precos_omie:           omieData.num_precos,\n    resumo,\n  }\n}];"
+      },
+      "id": "node-calculos",
+      "name": "Cálculos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://example.com/webhook",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "content", "value": "={{ $json.resumo }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-notificacao",
+      "name": "Notificação",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [1320, 300]
     }
   ],
-  "pinData": {},
   "connections": {
+    "Diariamente": {
+      "main": [[{ "node": "Gerar URLs OMIE", "type": "main", "index": 0 }]]
+    },
     "Gerar URLs OMIE": {
-      "main": [
-        [
-          {
-            "node": "HTTP Request OMIE1",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "HTTP Request OMIE", "type": "main", "index": 0 }]]
+    },
+    "HTTP Request OMIE": {
+      "main": [[{ "node": "Agregar OMIE", "type": "main", "index": 0 }]]
     },
     "Agregar OMIE": {
-      "main": [
-        [
-          {
-            "node": "HTTP Request CSV Tarifários",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "HTTP Request CSV Tarifários", "type": "main", "index": 0 }]]
     },
     "HTTP Request CSV Tarifários": {
-      "main": [
-        [
-          {
-            "node": "Cálculos",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Cálculos", "type": "main", "index": 0 }]]
     },
     "Cálculos": {
-      "main": [
-        [
-          {
-            "node": "Notificação",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Diariamente1": {
-      "main": [
-        [
-          {
-            "node": "Gerar URLs OMIE",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "HTTP Request OMIE1": {
-      "main": [
-        [
-          {
-            "node": "Agregar OMIE",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Notificação", "type": "main", "index": 0 }]]
     }
   },
-  "active": true,
-  "settings": {
-    "executionOrder": "v1",
-    "binaryMode": "separate"
-  },
-  "versionId": "d31e6991-0ee9-4d3d-b4bf-144812865015",
-  "meta": {
-    "instanceId": "85166c297844604796117af68b3e20aee5a50f4df203aa5e94632824940b30e9"
-  },
-  "id": "DJLDuhebZFH2bbR5",
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
   "tags": []
 }
