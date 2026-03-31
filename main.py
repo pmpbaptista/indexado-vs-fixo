@@ -341,9 +341,7 @@ def executar_analise(output_json=False):
     poupanca = r2(abs(custo_fixo - custo_idx))
     fixo_mais_barato = custo_fixo <= r2(custo_idx)
     recomendacao = (
-        melhor_fixo["nome"]
-        if fixo_mais_barato
-        else CONFIG.get("indexado_nome", "Indexado")
+        melhor_fixo["nome"] if fixo_mais_barato else CONFIG["indexado"]["nome"]
     )
 
     resumo = f"📊 *ANÁLISE OMIE* ({date.today().strftime('%d/%m/%Y')})\n"
@@ -351,7 +349,8 @@ def executar_analise(output_json=False):
     resumo += f"⚡ *MERCADO OMIE (últimos {CONFIG['dias_historico']} dias):*\n"
     resumo += f"• Média: *{r2(media_omie)} €/MWh*\n"
     resumo += f"• Break-even: {breakeven_MWh} €/MWh\n\n"
-    resumo += "🔒 *MELHOR FIXO (automatico):*\n"
+    fonte = "automatico (CSV Tiago Felícia)" if melhor_fixo else "N/A"
+    resumo += f"🔒 *MELHOR FIXO ({fonte}):*\n"
     if melhor_fixo:
         resumo += f"• {melhor_fixo['nome']}\n"
         resumo += f"• Energia: {r4(melhor_fixo['energia_kwh'])} €/kWh | Potência: {r4(melhor_fixo['potencia_dia'])} €/dia\n"
@@ -399,36 +398,7 @@ def executar_analise(output_json=False):
         print(json.dumps([output], ensure_ascii=False, indent=2))
         return output
 
-    # Caso contrário imprimir resumo formatado (humano)
-    print(f"\n📊 ANÁLISE DE ELETRICIDADE ({output['data_analise']})")
-    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    print(f"⚡ MERCADO (OMIE):  {output['media_omie_eur_mwh']:.2f} €/MWh")
-    print(f"🏠 ATUAL ({CONFIG['tarifario_atual_nome']}):")
-    if (
-        output["melhor_fixo_nome"]
-        and output["melhor_fixo_nome"]
-        .lower()
-        .find(CONFIG["tarifario_atual_nome"].lower())
-        != -1
-    ):
-        print(f"   • Custo Mensal: {output['custo_melhor_fixo_eur']:.2f}€")
-    else:
-        if meu_atual:
-            print(f"   • Custo Mensal: {meu_atual['custo']:.2f}€")
-        else:
-            print("   • [Tarifário não encontrado no simulador]")
-
-    print(f"\n🏆 MELHOR FIXO: {output['melhor_fixo_nome'] or 'N/A'}")
-    print(f"   • Custo Mensal: {output['custo_melhor_fixo_eur']:.2f}€")
-
-    print("\n📈 INDEXADO (Média OMIE):")
-    print(f"   • Custo Mensal: {output['custo_indexado_eur']:.2f}€")
-    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    if meu_atual and (meu_atual["custo"] - output["custo_indexado_eur"]) > 0:
-        ganho_val = meu_atual["custo"] - output["custo_indexado_eur"]
-        print(f"💡 RECOMENDAÇÃO: Mudar para Indexado poupa-te {ganho_val:.2f}€/mês.")
-    else:
-        print("💡 RECOMENDAÇÃO: O teu tarifário atual está otimizado.")
+    print(resumo.replace("*", ""))
 
     return output
 
