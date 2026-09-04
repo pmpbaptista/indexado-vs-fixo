@@ -471,9 +471,6 @@ def executar_analise(output_json=False):
     # ================= Comparações =================
     custo_atual = meu_atual["custo"] if meu_atual else None
 
-    poupanca = r2(abs(custo_fixo - custo_idx))
-    fixo_mais_barato = custo_fixo <= r2(custo_idx)
-
     # Recomendação global: entre o atual, o melhor fixo e o indexado
     opcoes = []
     if custo_atual is not None:
@@ -481,7 +478,25 @@ def executar_analise(output_json=False):
     if melhor_fixo:
         opcoes.append(("melhor_fixo", custo_fixo))
     opcoes.append(("indexado", custo_idx))
-    melhor_tipo, melhor_custo = min(opcoes, key=lambda x: x[1])
+    opcoes_sorted = sorted(opcoes, key=lambda x: x[1])
+    melhor_tipo, melhor_custo = opcoes_sorted[0]
+
+    # 2ª melhor opção com custo distinto (tolerância 0.005€ para colapsar
+    # duplicados quando o atual É o melhor fixo — evita "poupas 0€").
+    segunda_tipo, segunda_custo = None, None
+    for tipo, custo in opcoes_sorted[1:]:
+        if custo - melhor_custo > 0.005:
+            segunda_tipo, segunda_custo = tipo, custo
+            break
+    poupanca_best_vs_segunda = (
+        r2(segunda_custo - melhor_custo) if segunda_custo is not None else 0.0
+    )
+
+    # Legado: diferença fixo vs indexado (mantido para compatibilidade)
+    poupanca = r2(abs(custo_fixo - custo_idx)) if melhor_fixo else 0.0
+    fixo_mais_barato = (
+        custo_fixo <= r2(custo_idx) if melhor_fixo else False
+    )
 
     if melhor_tipo == "atual":
         recomendacao = "Manter o tarifário atual"
@@ -490,10 +505,15 @@ def executar_analise(output_json=False):
     else:
         recomendacao = idx["nome"]
 
-    # Poupanca relativamente ao que paga hoje
+    # Poupanca relativamente ao que paga hoje:
+    #  - se o atual é o melhor → poupança vs 2ª melhor (nunca 0 se há diferença)
+    #  - senão → quanto pouparia ao trocar para o melhor
     poupanca_vs_atual = None
     if custo_atual is not None:
-        poupanca_vs_atual = r2(abs(custo_atual - min(x[1] for x in opcoes)))
+        if melhor_tipo == "atual":
+            poupanca_vs_atual = poupanca_best_vs_segunda
+        else:
+            poupanca_vs_atual = r2(custo_atual - melhor_custo)
 
     resumo = f"📊 *ANÁLISE OMIE* ({date.today().strftime('%d/%m/%Y')})\n"
     resumo += "━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -521,11 +541,11 @@ def executar_analise(output_json=False):
     resumo += "━━━━━━━━━━━━━━━━━━━━\n"
 
     if melhor_tipo == "atual":
-        label = f"🏆 ATUAL é a melhor opção — poupas {poupanca_vs_atual}€ vs 2ª melhor"
+        label = f"🏆 ATUAL é a melhor opção — poupas {poupanca_vs_atual}€ vs 2ª melhor ({segunda_tipo})"
     elif melhor_tipo == "melhor_fixo":
-        label = f"🏆 FIXO mais barato — poupa {poupanca}€ vs indexado"
+        label = f"🏆 FIXO mais barato — poupa {poupanca_best_vs_segunda}€ vs 2ª melhor ({segunda_tipo})"
     else:
-        label = f"🏆 INDEXADO mais barato — poupa {poupanca}€"
+        label = f"🏆 INDEXADO mais barato — poupa {poupanca_best_vs_segunda}€ vs 2ª melhor ({segunda_tipo})"
     resumo += f"💡 *{label}*\n"
     resumo += f"   Recomendação: *{recomendacao}*"
 
@@ -563,7 +583,8 @@ def executar_analise(output_json=False):
         "custo_indexado_eur": r2(custo_idx),
         "indexado_edp_media_custo_eur": r2(custo_edp_idx),
         # Comparação
-        "poupanca_eur": poupanca,
+        "poupanca_eur": poupanca_best_vs_segunda,
+        "poupanca_fixo_vs_indexado_eur": poupanca,
         "recomendacao": recomendacao,
         "fixo_mais_barato": fixo_mais_barato,
         "num_precos_omie": num_precos,
